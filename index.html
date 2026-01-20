@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- Modell må 260119 - 12.28 - Uppdaterad Funciopnal Fix API --
-<!-- Colabfilen Gemini_textklass_web_från_fil.ipynb -->
+<!-- Colabfilen Textklassificering_02_större_modell_ipnyb.ipynb -->
 <html lang="sv">
 <head>
     <meta charset="UTF-8">
@@ -8,7 +8,7 @@
     <title>AI Textanalys - Svenska Filmomdömen</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; flex-direction: column; }
         .container { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 500px; }
         h1 { color: #333; text-align: center; margin-bottom: 1.5rem; font-size: 1.5rem; }
         textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 6px; resize: none; box-sizing: border-box; font-size: 1rem; }
@@ -22,6 +22,43 @@
         .prob-bar { height: 8px; background-color: #e0e0e0; border-radius: 4px; overflow: hidden; margin-top: 2px; }
         .prob-fill { height: 100%; background-color: #2196F3; width: 0%; transition: width 0.5s ease; }
         .highlight { font-weight: bold; font-size: 1.1rem; text-align: center; display: block; margin-bottom: 10px; }
+
+        /* <!-- NYTT: Footer för modellinfo --> */
+        .model-footer {
+            width: 100%;
+            max-width: 500px;
+            margin: 12px auto 24px auto;
+            padding: 14px 18px;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+            border: 1px solid #eee;
+            color: #333;
+            font-size: 0.92rem;
+            line-height: 1.35;
+        }
+        .model-footer h2 {
+            margin: 0 0 10px 0;
+            font-size: 1.05rem;
+            color: #222;
+        }
+        .model-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 6px;
+        }
+        .kv {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            border-bottom: 1px dashed #eee;
+            padding-bottom: 6px;
+        }
+        .kv:last-child { border-bottom: none; padding-bottom: 0; }
+        .k { color: #555; }
+        .v { color: #111; font-weight: 600; text-align: right; word-break: break-word; }
+        .note { margin-top: 10px; color: #666; font-size: 0.85rem; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -43,6 +80,13 @@
     </div>
 </div>
 
+<!-- NYTT: Footer längst ned på sidan -->
+<div class="model-footer" id="modelFooter" style="display:none;">
+    <h2>Modellinformation</h2>
+    <div class="model-grid" id="modelInfoGrid"></div>
+    <div class="note" id="modelInfoNote"></div>
+</div>
+
 <script>
     let model;
     let metadata;
@@ -55,10 +99,6 @@
     // Ändrad 22.20 - 260118
     // Uppdaterad Colab-fil. Skall fixa input-length. Jaja
 
-    // Det här är ett känt och frustrerande problem som beror på en versionskrock. 
-    // Google Colab har nyligen uppdaterat till Keras 3, men TensorFlow.js förväntar sig formatet från Keras 2. 
-    // Därför "glömmer" den bort input-formen i exporten oavsett hur tydligt man skriver koden.
-    
     async function loadModel() {
         const statusEl = document.getElementById('loadingStatus');
         const btn = document.getElementById('analyzeBtn');
@@ -66,14 +106,7 @@
 
         try {
             // Bygg sökvägar
-            // Skall ändras enligt Gemini Brute_force för versionskonfikten Keras och tensorflow
-            // 
-            //const modelUrl = MODEL_PATH + 'model.json?v=fixed2';
-            // Byt version för att tvinga cachebyte
-            //const modelUrl = MODEL_PATH + 'model.json?v=fixed3';
             const modelUrl = MODEL_PATH + 'model.json?v=fixed5';
-            
-            // const modelUrl = MODEL_PATH + 'model.json';
             const metadataUrl = MODEL_PATH + 'metadata.json';
 
             console.log(`Försöker ladda modell från: ${modelUrl}`);
@@ -92,6 +125,18 @@
             statusEl.style.color = "green";
             btn.disabled = false;
             console.log("Modell och metadata laddat.");
+
+            // --- NYTT: Visa modellinformation längst ned ---
+            // Försök även läsa TFJS-konverterar-info från model.json (valfritt men trevligt)
+            let modelJsonInfo = null;
+            try {
+                const mj = await fetch(modelUrl);
+                if (mj.ok) modelJsonInfo = await mj.json();
+            } catch (e) {
+                console.warn("Kunde inte läsa model.json för extra info:", e);
+            }
+            renderModelInfo(modelJsonInfo);
+            // --- SLUT NYTT ---
 
         } catch (error) {
             console.error(error);
@@ -202,6 +247,83 @@
         if(label === 'negativ') return '#F44336';
         return '#9E9E9E'; 
     }
+
+    // --- NYTT: Rendera modellinfo i footern ---
+    function renderModelInfo(modelJsonInfo) {
+        const footer = document.getElementById('modelFooter');
+        const grid = document.getElementById('modelInfoGrid');
+        const note = document.getElementById('modelInfoNote');
+
+        const safe = (v) => (v === undefined || v === null || v === "") ? "—" : String(v);
+
+        const vocabSize =
+            (modelJsonInfo && modelJsonInfo.modelTopology && modelJsonInfo.modelTopology.model_config &&
+             modelJsonInfo.modelTopology.model_config.config && modelJsonInfo.modelTopology.model_config.config.layers &&
+             modelJsonInfo.modelTopology.model_config.config.layers[1] &&
+             modelJsonInfo.modelTopology.model_config.config.layers[1].config &&
+             modelJsonInfo.modelTopology.model_config.config.layers[1].config.input_dim)
+            || (model && model.layers && model.layers[0] && model.layers[0].getConfig && model.layers[0].getConfig().inputDim)
+            || 1000; // fallback (du kör 1000 i exporten)
+
+        const maxLen = metadata?.max_length;
+        const labels = metadata?.labels ? metadata.labels.join(", ") : "—";
+        const tokenizerWords = metadata?.word_index ? Object.keys(metadata.word_index).length : "—";
+        const paramCount = model?.countParams ? model.countParams() : "—";
+        const layerCount = model?.layers ? model.layers.length : "—";
+        const loss = modelJsonInfo?.modelTopology?.training_config?.loss;
+        const lr = modelJsonInfo?.modelTopology?.training_config?.optimizer_config?.config?.learning_rate;
+        const generatedBy = modelJsonInfo?.generatedBy;
+        const convertedBy = modelJsonInfo?.convertedBy;
+
+        // Träningsmängd finns INTE i dina filer just nu.
+        // Stöd om du väljer att lägga till "training_samples" i metadata.json senare.
+        const trainingSamples = metadata?.training_samples; // valfritt fält (om du lägger till det)
+        const datasetName = metadata?.dataset_name;         // valfritt fält
+        const trainedAt = metadata?.trained_at;             // valfritt fält
+        const trainAcc = metadata?.train_accuracy;          // valfritt fält
+        const valAcc = metadata?.val_accuracy;              // valfritt fält
+
+        grid.innerHTML = "";
+        const rows = [
+            ["Modelltyp", "TF.js LayersModel (Sequential)"],
+            ["Input-längd (max tokens)", safe(maxLen)],
+            ["Vokabulärstorlek", safe(vocabSize)],
+            ["Labels", safe(labels)],
+            ["Antal parametrar", safe(paramCount)],
+            ["Antal lager", safe(layerCount)],
+            ["Loss", safe(loss)],
+            ["Learning rate", safe(lr)],
+            ["Export (Keras)", safe(generatedBy)],
+            ["Konverterare", safe(convertedBy)],
+            ["Träningsdataset", safe(datasetName)],
+            ["Tränad (antal datapunkter)", safe(trainingSamples)],
+            ["Tränad datum", safe(trainedAt)],
+            ["Train accuracy", safe(trainAcc)],
+            ["Val accuracy", safe(valAcc)],
+            ["Tokenizer ord i index", safe(tokenizerWords)]
+        ];
+
+        rows.forEach(([k, v]) => {
+            const div = document.createElement("div");
+            div.className = "kv";
+            div.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
+            grid.appendChild(div);
+        });
+
+        // Hjälptext om träningsdata inte finns
+        if (!trainingSamples && !datasetName && !trainedAt) {
+            note.innerHTML = `
+                Tips: Vill du visa hur många datapunkter modellen tränats på?
+                Lägg till t.ex. <span class="mono">"training_samples": 600</span> i <span class="mono">metadata.json</span>
+                (det påverkar inte modellen eller klassificeringskoden – bara visningen).
+            `;
+        } else {
+            note.innerText = "";
+        }
+
+        footer.style.display = "block";
+    }
+    // --- SLUT NYTT ---
 </script>
 
 </body>
